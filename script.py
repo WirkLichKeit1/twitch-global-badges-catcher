@@ -3,64 +3,90 @@ from bs4 import BeautifulSoup
 import json
 import os
 from pypdf import PdfReader
-import re
 from unidecode import unidecode
 import urllib3
 
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+
 urllib3.disable_warnings()
 
+# =============================
+# CONFIGURAÇÕES
+# =============================
+
 URL = "https://www.pe.senai.br/editais/"
-ARQUIVO = "editais_salvos.json"
+ARQUIVO = "editais_cabo_ti.json"
 
-# agora sem acentos
-CIDADE_CHAVES = ["cabo", "cabo de santo agostinho"]
+# Coloque seu token aqui
+TOKEN = "8187898235:AAFR-6LxeyJP97UiNJq8a9s7qFx4gK7pq6Q"
 
-TI_CHAVES = [
+# Cidade alvo
+CIDADE = "cabo"
+
+# Cursos/termos TI (no título ou no PDF)
+TI_TERMOS = [
+    "desenvolvimento de sistemas",
+    "tecnico em desenvolvimento de sistemas",
     "informatica",
+    "tecnico em informatica",
+    "informatica para internet",
+    "redes de computadores",
+    "tecnico em redes",
     "programacao",
-    "desenvolvimento",
+    "programador",
+    "desenvolvimento web",
     "software",
-    "redes",
-    "sistemas",
-    "computacao"
+    "banco de dados",
+    "seguranca da informacao",
+    "ciberseguranca",
+    "tecnologia da informacao"
 ]
 
-PADRAO_GENERICO = re.compile(r"edital.*\d+\s*vagas", re.IGNORECASE)
-
-
+# =============================
+# 1. Buscar editais no site
+# =============================
 def pegar_editais():
     r = requests.get(URL, verify=False)
     soup = BeautifulSoup(r.text, "html.parser")
 
     editais = []
+
     for link in soup.find_all("a"):
         titulo = link.get_text(strip=True)
         href = link.get("href")
 
         if titulo.lower().startswith("edital") and href:
             if ".pdf" in href.lower():
-                editais.append({"titulo": titulo, "link": href})
+                editais.append({
+                    "titulo": titulo,
+                    "link": href
+                })
 
     return editais
 
 
-def titulo_relevante(titulo):
+# =============================
+# 2. Verificar se é do Cabo
+# =============================
+def edital_eh_cabo(titulo):
     t = unidecode(titulo.lower())
-
-    if any(c in t for c in CIDADE_CHAVES):
-        return True
-
-    if any(p in t for p in TI_CHAVES):
-        return True
-
-    if PADRAO_GENERICO.search(t):
-        return False
-
-    return False
+    return CIDADE in t
 
 
+# =============================
+# 3. Verificar se título já indica TI
+# =============================
+def titulo_indica_ti(titulo):
+    t = unidecode(titulo.lower())
+    return any(p in t for p in TI_TERMOS)
+
+
+# =============================
+# 4. Baixar PDF temporário
+# =============================
 def baixar_pdf(url_pdf):
-    nome = url_pdf.split("/")[-1]
+    nome = "temp.pdf"
     r = requests.get(url_pdf, verify=False)
 
     with open(nome, "wb") as f:
@@ -69,8 +95,11 @@ def baixar_pdf(url_pdf):
     return nome
 
 
-def extrair_texto_pdf(arquivo_pdf):
-    reader = PdfReader(arquivo_pdf)
+# =============================
+# 5. Extrair texto do PDF
+# =============================
+def extrair_texto_pdf(arquivo):
+    reader = PdfReader(arquivo)
     texto = ""
 
     for pagina in reader.pages:
@@ -79,52 +108,156 @@ def extrair_texto_pdf(arquivo_pdf):
     return unidecode(texto.lower())
 
 
-def corresponde_pdf(texto_pdf):
-    cidade_ok = any(c in texto_pdf for c in CIDADE_CHAVES)
-    ti_ok = any(p in texto_pdf for p in TI_CHAVES)
-    return cidade_ok and ti_ok
+# =============================
+# 6. Verificar se PDF contém TI
+# =============================
+def pdf_contem_ti(texto_pdf):
+    return any(p in texto_pdf for p in TI_TERMOS)
 
 
-def main():
-    editais = pegar_editais()
+# =============================
+# FUNÇÃO PRINCIPAL DE BUSCA
+# =============================
+def buscar_novos_editais():
+    editais_site = pegar_editais()
 
+    # carregar aceitos já salvos
     if os.path.exists(ARQUIVO):
-        antigos = json.load(open(ARQUIVO))
+        aceitos = json.load(open(ARQUIVO))
     else:
-        antigos = []
+        aceitos = []
 
-    antigos_links = {e["link"] for e in antigos}
-    novos = [e for e in editais if e["link"] not in antigos_links]
+    aceitos_links = {e["link"] for e in aceitos}
 
-    print(f"📌 {len(novos)} edital(is) novo(s).")
+    novos_aceitos = []
 
-    for edital in novos:
-        titulo = edital["titulo"]
-        print("\n📄", titulo)
+    for edital in editais_site:
 
-        if not titulo_relevante(titulo):
-            print("⏭ Ignorado pelo título")
+        # já aceito antes
+        if edital["link"] in aceitos_links:
             continue
 
-        print("⬇️ Baixando PDF...")
+        titulo = edital["titulo"]
+        link = edital["link"]
+
+        print("\n📄 Avaliando:", titulo)
+
+        # 1) Só Cabo
+        if not edital_eh_cabo(titulo):
+            print("⏭ Ignorado (não é Cabo)")
+            continue
+
+        # 2) Se título já diz TI → aceita direto
+        if titulo_indica_ti(titulo):
+            print("🚨 ACEITO direto (título menciona TI)")
+            aceitos.append(edital)
+            novos_aceitos.append(edital)
+            continue
+
+        # 3) Título genérico → baixar PDF e verificar
+        print("⬇️ Título genérico → baixando PDF para checar cursos...")
 
         try:
-            arquivo = baixar_pdf(edital["link"])
-            texto = extrair_texto_pdf(arquivo)
+            arquivo = baixar_pdf(link)
+            texto_pdf = extrair_texto_pdf(arquivo)
 
-            if corresponde_pdf(texto):
-                print("🚨 CABO + TI encontrado!")
-                print("Link:", edital["link"])
+            if pdf_contem_ti(texto_pdf):
+                print("🚨 ACEITO (PDF contém curso TI!)")
+                aceitos.append(edital)
+                novos_aceitos.append(edital)
             else:
-                print("❌ Não contém CABO + TI.")
+                print("❌ Rejeitado (PDF não tem TI)")
 
-            # apagar pdf depois
+            # apagar PDF temporário
             os.remove(arquivo)
 
         except Exception as e:
-            print("⚠️ Erro:", e)
+            print("⚠️ Erro ao analisar PDF:", e)
 
-    json.dump(editais, open(ARQUIVO, "w"), indent=2)
+    # salvar apenas aceitos
+    json.dump(aceitos, open(ARQUIVO, "w"), indent=2)
+
+    return novos_aceitos
+
+
+# =============================
+# COMANDOS DO TELEGRAM
+# =============================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Bot SENAI Editais ativo!\n\n"
+        "Use:\n"
+        "/buscar → buscar editais agora\n"
+        "/auto → ativar busca automática (1x por dia)"
+    )
+
+
+async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Buscando editais novos CABO + TI...")
+
+    novos = buscar_novos_editais()
+
+    if not novos:
+        await update.message.reply_text("✅ Nenhum edital novo encontrado.")
+    else:
+        for e in novos:
+            msg = (
+                f"🚨 Novo edital encontrado!\n\n"
+                f"📄 {e['titulo']}\n"
+                f"🔗 {e['link']}"
+            )
+            await update.message.reply_text(msg)
+
+
+# =============================
+# JOB AUTOMÁTICO (24h)
+# =============================
+
+async def job_diario(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    novos = buscar_novos_editais()
+
+    if novos:
+        for e in novos:
+            msg = (
+                f"🚨 Novo edital CABO + TI!\n\n"
+                f"📄 {e['titulo']}\n"
+                f"🔗 {e['link']}"
+            )
+            await context.bot.send_message(chat_id=chat_id, text=msg)
+
+
+async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+
+    context.job_queue.run_repeating(
+        job_diario,
+        interval=86400,  # 24h
+        first=10,
+        chat_id=chat_id
+    )
+
+    await update.message.reply_text(
+        "✅ Busca automática ativada!\n"
+        "O bot vai checar novos editais a cada 24h."
+    )
+
+
+# =============================
+# MAIN
+# =============================
+
+def main():
+    print("🤖 Bot rodando...")
+
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("buscar", buscar))
+    app.add_handler(CommandHandler("auto", auto))
+
+    app.run_polling()
 
 
 if __name__ == "__main__":

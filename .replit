@@ -3,6 +3,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-25_05"
+packages = ["tk", "xorg.libX11", "python3Full"]
 
 [unitTest]
 language = "python3"
@@ -18,6 +19,7 @@ deploymentTarget = "cloudrun"
 expertMode = true
 
 [workflows]
+runButton = "Project"
 
 [[workflows.workflow]]
 name = "run"
@@ -27,6 +29,27 @@ author = 48223061
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python script.py"
+
+[[workflows.workflow]]
+name = "teste"
+mode = "sequential"
+author = 48223061
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python teste.py"
+
+[[workflows.workflow]]
+name = "teste"
+mode = "parallel"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "vnc"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PATH=\"/nix/profile/default/bin:$PATH\" python3 teste.py"
 
 [[ports]]
 localPort = 8080
