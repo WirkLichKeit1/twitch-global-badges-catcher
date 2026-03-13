@@ -3,7 +3,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["tk", "xorg.libX11", "python3Full"]
+packages = ["tk", "xorg.libX11", "python3Full", "hashcat", "wget"]
 
 [unitTest]
 language = "python3"
@@ -28,28 +28,12 @@ author = 48223061
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python script.py"
+args = "python main.py"
 
-[[workflows.workflow]]
-name = "teste"
-mode = "sequential"
-author = 48223061
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python teste.py"
-
-[[workflows.workflow]]
-name = "teste"
-mode = "parallel"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "vnc"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PATH=\"/nix/profile/default/bin:$PATH\" python3 teste.py"
+[[ports]]
+localPort = 5000
+externalPort = 5000
+exposeLocalhost = true
 
 [[ports]]
 localPort = 8080
